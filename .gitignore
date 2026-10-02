@@ -1,0 +1,44 @@
+# Node / frontend
+node_modules/
+dist/
+.vite/
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+.pytest_cache/
+
+# Local environment
+.env
+.env.*
+!.env.example
+
+# Local cache and generated data
+data/index/*
+data/embeddings/*
+data/cache/*
+!data/index/.gitkeep
+!data/embeddings/.gitkeep
+!data/cache/.gitkeep
+
+# Downloaded or generated local models
+models/*.bin
+models/*.onnx
+models/*.pt
+models/*.pth
+models/*.safetensors
+models/*.ckpt
+
+# Temporary files
+*.tmp
+*.temp
+*.swp
+*.bak
+.DS_Store
+Thumbs.db
