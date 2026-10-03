@@ -26,8 +26,38 @@ const PAGE_LINKS = [
   { id: 'duplicates', label: 'Duplicates' },
   { id: 'health', label: 'File Health' },
 ];
+const SIDEBAR_ITEMS = [
+  { id: 'dashboard', label: 'Dashboard', target: 'dashboard' },
+  { id: 'images', label: 'All Images', target: 'library' },
+  { id: 'search', label: 'Search', target: 'search' },
+  { id: 'categories', label: 'Categories', target: 'processing' },
+  { id: 'duplicates', label: 'Duplicates', target: 'duplicates' },
+  { id: 'important', label: 'Important', target: 'search' },
+  { id: 'review', label: 'Needs Review', target: 'health' },
+  { id: 'processing', label: 'Processing', target: 'processing' },
+  { id: 'settings', label: 'Settings', target: 'health' },
+];
 const AI_BATCH_SIZE = 50;
 const DETAILED_AI_BATCH_SIZE = 5;
+const LANDING_ORBIT_DURATION_SECONDS = 22;
+const LANDING_IMAGE_CARDS = [
+  'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=360&q=80',
+  'https://images.unsplash.com/photo-1539109136881-3be0616acf4b?auto=format&fit=crop&w=360&q=80',
+  'https://images.unsplash.com/photo-1515886657613-9f3515b0c78f?auto=format&fit=crop&w=360&q=80',
+  'https://images.unsplash.com/photo-1517841905240-472988babdf9?auto=format&fit=crop&w=360&q=80',
+  'https://images.unsplash.com/photo-1524504388940-b1c1722653e1?auto=format&fit=crop&w=360&q=80',
+  'https://images.unsplash.com/photo-1529139574466-a303027c1d8b?auto=format&fit=crop&w=360&q=80',
+  'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?auto=format&fit=crop&w=420&q=85',
+  'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=360&q=80',
+  'https://images.unsplash.com/photo-1488426862026-3ee34a7d66df?auto=format&fit=crop&w=360&q=80',
+  'https://images.unsplash.com/photo-1529626455594-4ff0802cfb7e?auto=format&fit=crop&w=360&q=80',
+  'https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=360&q=80',
+  'https://images.unsplash.com/photo-1504593811423-6dd665756598?auto=format&fit=crop&w=360&q=80',
+  'https://images.unsplash.com/photo-1524250502761-1ac6f2e30d43?auto=format&fit=crop&w=360&q=80',
+  'https://images.unsplash.com/photo-1531123897727-8f129e1688ce?auto=format&fit=crop&w=360&q=80',
+  'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?auto=format&fit=crop&w=360&q=80',
+  'https://images.unsplash.com/photo-1502823403499-6ccfcf4fb453?auto=format&fit=crop&w=360&q=80',
+];
 
 function getPageFromHash() {
   const pageId = window.location.hash.slice(1);
@@ -76,6 +106,16 @@ function getPreviewUrl(record, libraryId) {
     record_id: record.record_id || record.relative_path,
   });
   return `http://localhost:8000/files/preview?${params.toString()}`;
+}
+
+function formatMemoryDate(value) {
+  if (!value) {
+    return 'Date unavailable';
+  }
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? 'Date unavailable'
+    : new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', year: 'numeric' }).format(date);
 }
 
 function getTopCategoryShare(record) {
@@ -133,6 +173,7 @@ function App() {
   const [lifecycleError, setLifecycleError] = useState('');
   const [intelligenceRecord, setIntelligenceRecord] = useState(null);
   const [intelligenceLibraryId, setIntelligenceLibraryId] = useState('');
+  const [showLaunchScreen, setShowLaunchScreen] = useState(true);
 
   const displayedImages = useMemo(() => {
     if (!scanResult?.image_records) {
@@ -198,6 +239,22 @@ function App() {
     setCurrentPage(pageId);
   };
 
+  const enterDashboard = () => {
+    setShowLaunchScreen(false);
+    navigateToPage('dashboard');
+  };
+
+  const startScanning = () => {
+    setShowLaunchScreen(false);
+    navigateToPage('library');
+    void handleFolderSelect();
+  };
+
+  const handleDashboardSearch = (event) => {
+    event.preventDefault();
+    navigateToPage('search');
+  };
+
   const showIntelligence = (record, libraryId) => {
     setIntelligenceRecord(record);
     setIntelligenceLibraryId(libraryId || record.library_id || scanResult?.library_id || '');
@@ -227,7 +284,7 @@ function App() {
     const response = await fetch('http://localhost:8000/classification/process', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ folder_path: indexedLibraryPath, force: false }),
+      body: JSON.stringify({ folder_path: indexedLibraryPath, force: false, use_llm: true }),
     });
     const data = await response.json();
     if (!response.ok) {
@@ -874,36 +931,100 @@ function App() {
 
   return (
     <main className="app-shell">
-      <section className="library-panel">
-        <header className="panel-header">
-          <div>
-            <h1>MemoryOS</h1>
-            <p className="eyebrow app-tagline">AI-Powered Local Image Intelligence &amp; Retrieval</p>
-            <p className="app-subtitle">Your private image library, organized one simple step at a time.</p>
+      {showLaunchScreen ? (
+        <section className="launch-screen" aria-labelledby="launch-heading">
+          <div className="launch-stage" aria-hidden="true">
+            {LANDING_IMAGE_CARDS.map((imageUrl, index) => (
+              <div
+                className="launch-card"
+                key={imageUrl}
+                style={{
+                  '--orbit-delay': `${-(index * LANDING_ORBIT_DURATION_SECONDS / LANDING_IMAGE_CARDS.length)}s`,
+                  '--orbit-tilt': `${(index % 5) - 2}deg`,
+                }}
+              >
+                <img src={imageUrl} alt="" loading="eager" />
+              </div>
+            ))}
           </div>
-        </header>
-        <div className="privacy-note">
-          Your original images stay in their folders. MemoryOS stores local metadata, AI results, and embeddings.
-        </div>
-
-        <nav className="app-navigation" aria-label="Main navigation">
-          {PAGE_LINKS.map((page) => (
-            <button
-              type="button"
-              key={page.id}
-              className={`navigation-link${currentPage === page.id ? ' navigation-link-active' : ''}`}
-              aria-current={currentPage === page.id ? 'page' : undefined}
-              onClick={() => navigateToPage(page.id)}
-            >
-              {page.label}
+          <div className="launch-copy">
+            <p className="launch-kicker">Private image intelligence</p>
+            <h1 id="launch-heading">MemoryOS</h1>
+            <p className="launch-title">See the stories inside your camera roll.</p>
+            <p className="launch-description">
+              A local-first space for finding, understanding, and caring for every image on your computer.
+            </p>
+            <div className="launch-actions">
+              <button type="button" className="launch-primary" onClick={enterDashboard}>
+                Try MemoryOS <span aria-hidden="true">↗</span>
+              </button>
+              <button type="button" className="launch-secondary" onClick={startScanning} disabled={loading}>
+                Scan images <span aria-hidden="true">+</span>
+              </button>
+            </div>
+            <p className="launch-footnote">Everything stays on your device.</p>
+          </div>
+          <div className="launch-index" aria-hidden="true">
+            <span>01</span><span>LOCAL</span><span>MEMORY, REFRAMED</span>
+          </div>
+        </section>
+      ) : null}
+      <section className={`library-panel${showLaunchScreen ? ' library-panel-hidden' : ''}`}>
+        <div className="workspace-layout">
+          <aside className="workspace-sidebar" aria-label="MemoryOS navigation">
+            <button type="button" className="workspace-brand" onClick={() => navigateToPage('dashboard')}>
+              <span className="workspace-brand-mark" aria-hidden="true">M</span>
+              <span>MemoryOS</span>
             </button>
-          ))}
-        </nav>
+            <p className="workspace-nav-label">Workspace</p>
+            <nav className="workspace-nav">
+              {SIDEBAR_ITEMS.map((item) => (
+                <button
+                  type="button"
+                  key={item.id}
+                  className={`workspace-nav-link${item.target === currentPage ? ' workspace-nav-link-active' : ''}`}
+                  aria-current={item.target === currentPage ? 'page' : undefined}
+                  onClick={() => navigateToPage(item.target)}
+                >
+                  <span className={`workspace-nav-icon workspace-nav-icon-${item.id}`} aria-hidden="true" />
+                  {item.label}
+                </button>
+              ))}
+            </nav>
+            <div className="workspace-local-note">
+              <strong>Local-first</strong>
+              <span>All data stays on this device.</span>
+            </div>
+          </aside>
 
-        <div className="status-bar" role="status" aria-live="polite">
-          <span className="status-label">Status:</span>
-          <span>{status}</span>
-        </div>
+          <div className="workspace-main">
+            <header className="workspace-topbar">
+              <form className="workspace-search" onSubmit={handleDashboardSearch}>
+                <span className="workspace-search-icon" aria-hidden="true" />
+                <input
+                  type="search"
+                  value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                  placeholder="Search your memories..."
+                  aria-label="Search your memories"
+                />
+              </form>
+              <div className="workspace-topbar-actions">
+                <button type="button" className="workspace-icon-button" title="Processing status" onClick={() => navigateToPage('processing')}>
+                  <span className="workspace-status-dot" aria-hidden="true" />
+                  <span>Processing</span>
+                </button>
+                <button type="button" className="workspace-icon-button" title="Settings" onClick={() => navigateToPage('health')}>
+                  <span className="workspace-settings-icon" aria-hidden="true" />
+                  <span>Settings</span>
+                </button>
+              </div>
+            </header>
+
+            <div className="status-bar" role="status" aria-live="polite">
+              <span className="status-label">Status:</span>
+              <span>{status}</span>
+            </div>
 
         {error ? <div className="error-box">{error}</div> : null}
         {lifecycleError ? <div className="error-box" role="alert">{lifecycleError}</div> : null}
@@ -1032,127 +1153,79 @@ function App() {
           </section>
         ) : null}
 
-        {currentPage === 'dashboard' ? <section className="dashboard-section" aria-labelledby="dashboard-heading">
-          <div className="dashboard-header">
+        {currentPage === 'dashboard' ? <section className="dashboard-section memory-dashboard" aria-labelledby="dashboard-heading">
+          <div className="memory-dashboard-header">
             <div>
-              <p className="eyebrow">Local Index Analytics</p>
-              <h2 id="dashboard-heading">MemoryOS Dashboard</h2>
+              <p className="eyebrow">Private local index</p>
+              <h2 id="dashboard-heading">Your image memory, organized.</h2>
+              <p>Find, understand, and manage the images on your device.</p>
             </div>
-            <button
-              type="button"
-              className="secondary-button"
-              onClick={() => refreshDashboard(folderPath)}
-              disabled={dashboardLoading}
-            >
-              {dashboardLoading ? 'Refreshing...' : 'Refresh Dashboard'}
-            </button>
+            <div className="memory-dashboard-actions">
+              <button type="button" className="primary-button" onClick={startScanning} disabled={loading}>
+                Scan Images
+              </button>
+              <button type="button" className="secondary-button" onClick={() => navigateToPage('search')}>
+                Search Memory
+              </button>
+            </div>
           </div>
+          <div className="memory-trust-line"><span className="memory-trust-dot" /> Local <span>•</span> Private <span>•</span> Indexed</div>
           {dashboardError ? <div className="error-box" role="alert">{dashboardError}</div> : null}
           {!dashboardError && dashboardStats ? (
             dashboardStats.total_images === 0 ? (
-              <div className="empty-state dashboard-empty">
-                <strong>No images indexed yet.</strong>
-                <span>Enter the full path to your image folder, then scan your library to get started.</span>
-                <button type="button" className="primary-button" onClick={() => navigateToPage('library')}>
-                  Set up my library
-                </button>
+              <div className="memory-empty-state">
+                <div className="memory-empty-mark" aria-hidden="true">+</div>
+                <p className="eyebrow">No local memories yet</p>
+                <h3>Start building your memory</h3>
+                <p>Select a local image folder and let MemoryOS organize, understand, and index it.</p>
+                <button type="button" className="primary-button" onClick={startScanning} disabled={loading}>Scan Images</button>
               </div>
             ) : (
               <>
-                <div className="dashboard-section-intro">
-                  <p className="eyebrow">Memory overview</p>
-                  <p>What MemoryOS has indexed, analyzed, categorized, and flagged for attention.</p>
-                </div>
-                <div className="dashboard-kpis">
-                  <div className="dashboard-kpi"><span>Total indexed</span><strong>{dashboardStats.total_images}</strong></div>
-                  <div className="dashboard-kpi"><span>AI processed</span><strong>{dashboardStats.processed_images}</strong></div>
-                  <div className="dashboard-kpi"><span>Assigned to Others</span><strong>{dashboardStats.categories.distribution.find((item) => item.category === 'Others')?.count ?? 0}</strong></div>
-                  <div className="dashboard-kpi"><span>Duplicate groups</span><strong>{dashboardStats.duplicates.groups}</strong></div>
-                  <div className="dashboard-kpi"><span>Files needing attention</span><strong>{dashboardStats.file_status.missing + dashboardStats.file_status.modified + dashboardStats.file_status.unverified}</strong></div>
+                <div className="memory-summary-grid">
+                  <div className="memory-summary-card memory-summary-primary"><span>Images indexed</span><strong>{dashboardStats.total_images.toLocaleString()}</strong><small>Across {dashboardStats.library_count} local {dashboardStats.library_count === 1 ? 'library' : 'libraries'}</small></div>
+                  <div className="memory-summary-card"><span>AI processed</span><strong>{dashboardStats.processed_images.toLocaleString()}</strong><small>{dashboardStats.processing.pending.toLocaleString()} waiting to analyze</small></div>
+                  <div className="memory-summary-card"><span>Duplicates found</span><strong>{dashboardStats.duplicates.records_in_groups.toLocaleString()}</strong><small>{dashboardStats.duplicates.groups.toLocaleString()} groups detected</small></div>
+                  <div className="memory-summary-card"><span>Needs review</span><strong>{dashboardStats.classification.needs_review.toLocaleString()}</strong><small>Classification attention</small></div>
                 </div>
 
-                <div className="dashboard-grid">
-                  <section className="dashboard-card">
-                    <h3>AI Health</h3>
-                    {Object.entries(dashboardStats.processing).map(([label, count]) => (
-                      <div className="dashboard-bar-row" key={`ai-${label}`}>
-                        <span>{label.replace('_', ' ')}</span>
-                        <div className="dashboard-bar-track"><div className="dashboard-bar-fill" style={{ width: `${dashboardStats.total_images ? count * 100 / dashboardStats.total_images : 0}%` }} /></div>
-                        <strong>{count}</strong>
-                      </div>
-                    ))}
-                    <h3 className="dashboard-subheading">Classification Status</h3>
-                    {Object.entries(dashboardStats.classification).filter(([label]) => label !== 'needs_review').map(([label, count]) => (
-                      <div className="dashboard-bar-row" key={`classification-${label}`}>
-                        <span>{label.replace('_', ' ')}</span>
-                        <div className="dashboard-bar-track"><div className="dashboard-bar-fill classification-fill" style={{ width: `${dashboardStats.total_images ? count * 100 / dashboardStats.total_images : 0}%` }} /></div>
-                        <strong>{count}</strong>
-                      </div>
-                    ))}
-                  </section>
-
-                  <section className="dashboard-card">
-                    <h3>Memory Categories</h3>
-                    <p className="dashboard-caption">
-                      {dashboardStats.categories.categorized_images} assigned categories out of {dashboardStats.total_images} indexed images. Images with weak or conflicting evidence are assigned to Others; {dashboardStats.classification.pending} are not classified yet.
-                    </p>
-                    {!dashboardStats.categories.categorized_images ? (
-                      <div className="empty-state">
-                        <strong>No categories assigned yet.</strong>
-                        <span>Run image analysis and categorization in AI Workspace. Images without enough evidence are assigned to Others.</span>
-                        <button type="button" className="secondary-button" onClick={() => navigateToPage('processing')}>
-                          Open AI Tools
+                <div className="memory-dashboard-grid">
+                  <section className="memory-panel memory-recent-panel">
+                    <div className="memory-panel-heading"><div><p className="eyebrow">Latest indexed files</p><h3>Recent Memories</h3></div><button type="button" className="text-button" onClick={() => navigateToPage('library')}>View all</button></div>
+                    <div className="memory-recent-list">
+                      {(dashboardStats.recent_images ?? []).map((image) => (
+                        <button type="button" className="memory-recent-item" key={`${image.library_id}:${image.relative_path}`} onClick={() => navigateToPage('library')}>
+                          {imagePreview(image, image.library_id, 'memory-recent-preview')}
+                          <span className="memory-recent-copy"><strong>{image.filename}</strong><span>{image.category}</span><small>{formatMemoryDate(image.modified_time)}</small></span>
+                          <span className={`memory-record-status memory-record-status-${image.ai_processing_status}`}>{image.ai_processing_status === 'completed' ? 'Ready' : image.ai_processing_status}</span>
                         </button>
-                      </div>
-                    ) : null}
-                    {[...dashboardStats.categories.distribution]
-                      .sort((left, right) => right.count - left.count || left.category.localeCompare(right.category))
-                      .map((item) => (
-                      <div className="dashboard-bar-row category-row" key={item.category}>
-                        <span>{item.category}</span>
-                        <div className="dashboard-bar-track"><div className="dashboard-bar-fill category-fill" style={{ width: `${item.percentage}%` }} /></div>
-                        <strong>{item.count}</strong>
-                      </div>
-                    ))}
-                  </section>
-
-                  <section className="dashboard-card">
-                    <h3>File Health</h3>
-                    {Object.entries(dashboardStats.file_status).map(([label, count]) => (
-                      <div className="dashboard-bar-row" key={`file-${label}`}>
-                        <span>{label}</span>
-                        <div className="dashboard-bar-track"><div className="dashboard-bar-fill file-fill" style={{ width: `${dashboardStats.total_images ? count * 100 / dashboardStats.total_images : 0}%` }} /></div>
-                        <strong>{count}</strong>
-                      </div>
-                    ))}
-                  </section>
-
-                  <section className="dashboard-card">
-                    <h3>Duplicate Overview</h3>
-                    <div className="dashboard-duplicate-stats">
-                      <div><span>Exact groups</span><strong>{dashboardStats.duplicates.exact_groups}</strong></div>
-                      <div><span>Near groups</span><strong>{dashboardStats.duplicates.near_duplicate_groups}</strong></div>
-                      <div><span>Visual groups</span><strong>{dashboardStats.duplicates.visual_duplicate_groups}</strong></div>
-                      <div><span>Records involved</span><strong>{dashboardStats.duplicates.records_in_groups}</strong></div>
+                      ))}
+                      {!dashboardStats.recent_images?.length ? <p className="dashboard-caption">Indexed files are available in All Images.</p> : null}
                     </div>
                   </section>
 
-                  <section className="dashboard-card dashboard-libraries">
-                    <h3>Libraries ({dashboardStats.library_count})</h3>
-                    {dashboardStats.libraries.length ? dashboardStats.libraries.map((library) => (
-                      <div className="dashboard-library-row" key={library.library_id}>
-                        <strong>{library.display_name}</strong>
-                        <span>{library.total_images} images · {library.processed_images} AI processed · {library.missing_files} missing</span>
-                      </div>
-                    )) : <p className="dashboard-caption">No library details are available.</p>}
+                  <section className="memory-panel memory-processing-panel">
+                    <div className="memory-panel-heading"><div><p className="eyebrow">Local analysis</p><h3>Processing Status</h3></div><span className="memory-live-label">{dashboardStats.processing.processing ? 'Active' : 'Idle'}</span></div>
+                    <div className="memory-processing-total"><strong>{dashboardStats.processed_images.toLocaleString()}</strong><span> / {dashboardStats.total_images.toLocaleString()} images processed</span></div>
+                    <div className="memory-progress-track"><span style={{ width: `${dashboardStats.total_images ? dashboardStats.processed_images * 100 / dashboardStats.total_images : 0}%` }} /></div>
+                    <dl className="memory-processing-list">
+                      <div><dt>Current</dt><dd>{aiProgress && aiLoading ? `${aiProgress.completed} images in progress` : 'Ready for local analysis'}</dd></div>
+                      <div><dt>Pending</dt><dd>{dashboardStats.processing.pending.toLocaleString()}</dd></div>
+                      <div><dt>Skipped</dt><dd>{dashboardStats.processing.other.toLocaleString()}</dd></div>
+                      <div><dt>Duplicates</dt><dd>{dashboardStats.duplicates.records_in_groups.toLocaleString()}</dd></div>
+                      <div><dt>Needs review</dt><dd>{dashboardStats.classification.needs_review.toLocaleString()}</dd></div>
+                      <div><dt>Failed</dt><dd>{dashboardStats.processing.failed.toLocaleString()}</dd></div>
+                    </dl>
                   </section>
-                </div>
-                <div className="dashboard-shortcuts" aria-label="MemoryOS tools">
-                  {PAGE_LINKS.filter((page) => page.id !== 'dashboard').map((page) => (
-                    <button type="button" key={page.id} className="secondary-button" onClick={() => navigateToPage(page.id)}>
-                      Open {page.label}
-                    </button>
-                  ))}
+
+                  <section className="memory-panel memory-category-panel">
+                    <div className="memory-panel-heading"><div><p className="eyebrow">What is in your library</p><h3>Memory Categories</h3></div><button type="button" className="text-button" onClick={() => navigateToPage('processing')}>Explore</button></div>
+                    <div className="memory-category-grid">
+                      {[...dashboardStats.categories.distribution].sort((left, right) => right.count - left.count || left.category.localeCompare(right.category)).slice(0, 8).map((item) => (
+                        <div className="memory-category-row" key={item.category}><span>{item.category}</span><strong>{item.count.toLocaleString()}</strong><div className="memory-category-bar"><i style={{ width: `${item.percentage}%` }} /></div></div>
+                      ))}
+                    </div>
+                  </section>
                 </div>
               </>
             )
@@ -1868,6 +1941,8 @@ function App() {
             </div>
           </div>
         ) : null}
+          </div>
+        </div>
       </section>
     </main>
   );

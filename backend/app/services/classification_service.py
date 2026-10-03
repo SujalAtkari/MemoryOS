@@ -10,6 +10,7 @@ import numpy as np
 from app.services.embedding_service import encode_text_embeddings
 from app.services.index_storage import save_json_atomically, serialize_index_update
 from app.services.library_service import INDEX_PATH, validate_folder_path
+from app.services.local_llm_service import classify_ambiguous_records
 
 CLASSIFICATION_VERSION = 'phase3-multi-evidence-v6'
 SEMANTIC_TEMPERATURE = 0.08
@@ -560,6 +561,7 @@ def process_library_classification(
     folder_path: str,
     force: bool = False,
     record_id: str | None = None,
+    use_llm: bool = False,
     config: ClassificationConfig = DEFAULT_CONFIG,
 ) -> dict:
     library_root = validate_folder_path(folder_path)
@@ -589,6 +591,7 @@ def process_library_classification(
         total += 1
         if (
             not force
+            and not use_llm
             and _outputs_are_valid(record)
             and record.get('classification_status') == 'classified'
         ):
@@ -634,6 +637,46 @@ def process_library_classification(
         records[relative_path] = record
 
     _save_index(index)
+    llm_result = {'status': 'skipped', 'model': None, 'classifications': []}
+    if use_llm and not record_id:
+        ambiguous_records = [
+            record for record in records.values()
+            if record.get('category') == 'Others'
+            and record.get('classification_status') == 'classified'
+        ]
+        for offset in range(0, len(ambiguous_records), 12):
+            batch_result = classify_ambiguous_records(
+                ambiguous_records[offset:offset + 12],
+                CATEGORY_PROMPTS,
+            )
+            if batch_result.get('status') != 'used':
+                llm_result = batch_result
+                break
+            llm_result = batch_result
+            accepted = {item['id']: item for item in batch_result.get('classifications', [])}
+            for relative_path, record in records.items():
+                item = accepted.get(str(record.get('record_id') or relative_path))
+                if not item or item['category'] == 'Others':
+                    continue
+                record['category'] = item['category']
+                record['classification_confidence'] = item['confidence']
+                record['confidence'] = item['confidence']
+                record['classification_reason'] = [
+                    *(record.get('classification_reason') or []),
+                    f"Local RAG classifier: {item['reason']}",
+                ]
+                record['assignment_reason'] = f"Assigned by local RAG classifier: {item['reason']}"
+                record['classification_sources'] = sorted({
+                    *(record.get('evidence_sources') or []),
+                    'local_llm_rag',
+                })
+                records[relative_path] = record
+        _save_index(index)
+        classifications = [
+            _classification_response(relative_path, record)
+            for relative_path, record in records.items()
+            if record.get('classification_status') in {'classified', 'needs_review'}
+        ]
     return {
         'library_id': library_id,
         'library_root': library_root,
@@ -646,6 +689,12 @@ def process_library_classification(
         'errors': errors,
         'classifications': classifications,
         'classification_version': CLASSIFICATION_VERSION,
+        'llm': {
+            'status': llm_result.get('status'),
+            'model': llm_result.get('model'),
+            'detail': llm_result.get('detail'),
+            'accepted': len(llm_result.get('classifications', [])),
+        },
     }
 
 

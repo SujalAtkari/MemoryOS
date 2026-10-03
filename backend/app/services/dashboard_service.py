@@ -55,6 +55,7 @@ def _empty_stats() -> dict:
         'library_count': 0,
         'invalid_libraries': 0,
         'libraries': [],
+        'recent_images': [],
     }
 
 
@@ -287,4 +288,39 @@ def get_dashboard_stats(folder_path: str | None = None) -> dict:
         }
         for library in results
     ]
+    recent_images = []
+    for library_id, library in index['libraries'].items():
+        if not isinstance(library, dict):
+            continue
+        library_root = library.get('library_root')
+        if normalized_root:
+            if not isinstance(library_root, str):
+                continue
+            try:
+                matches = os.path.normcase(str(Path(library_root).resolve())) == os.path.normcase(normalized_root)
+            except OSError:
+                matches = False
+            if not matches:
+                continue
+        records = library.get('records', {})
+        if not isinstance(records, dict):
+            continue
+        for relative_path, record in records.items():
+            if not isinstance(record, dict):
+                continue
+            recent_images.append({
+                'library_id': str(library_id),
+                'filename': record.get('filename') or Path(str(relative_path)).name,
+                'relative_path': str(relative_path),
+                'category': record.get('category') or 'Uncategorized',
+                'modified_time': record.get('modified_time'),
+                'ai_processing_status': record.get('ai_processing_status') or 'pending',
+                'classification_status': record.get('classification_status') or 'pending',
+                'file_status': record.get('file_status') or 'unverified',
+            })
+    combined['recent_images'] = sorted(
+        recent_images,
+        key=lambda item: item.get('modified_time') or '',
+        reverse=True,
+    )[:12]
     return combined

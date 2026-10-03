@@ -8,6 +8,8 @@ OLLAMA_URL = os.environ.get('MEMORYOS_OLLAMA_URL', 'http://127.0.0.1:11434')
 OLLAMA_MODEL = os.environ.get('MEMORYOS_OLLAMA_MODEL', 'llama3.2:3b')
 RERANK_CANDIDATE_LIMIT = 8
 RERANK_TIMEOUT_SECONDS = 30
+CLASSIFICATION_BATCH_LIMIT = 12
+CLASSIFICATION_TIMEOUT_SECONDS = 12
 
 
 def rerank_candidates(query: str, candidates: list[dict[str, Any]]) -> dict[str, Any]:
@@ -101,3 +103,105 @@ def rerank_candidates(query: str, candidates: list[dict[str, Any]]) -> dict[str,
             'detail': detail,
             'order': [],
         }
+
+
+def classify_ambiguous_records(
+    records: list[dict[str, Any]],
+    category_prompts: dict[str, str],
+) -> dict[str, Any]:
+    """Use local Ollama as bounded second-pass evidence for ambiguous records."""
+    selected = records[:CLASSIFICATION_BATCH_LIMIT]
+    if not selected:
+        return {'status': 'skipped', 'model': OLLAMA_MODEL, 'classifications': []}
+
+    context = []
+    for record in selected:
+        context.append({
+            'id': str(record.get('record_id') or record.get('relative_path') or ''),
+            'filename': str(record.get('filename') or '')[:180],
+            'ocr': str(record.get('ocr_text') or '')[:700],
+            'caption': str(record.get('caption') or '')[:300],
+            'top_categories': record.get('top_categories', [])[:3],
+            'category_scores': record.get('category_scores', {}),
+        })
+    category_context = [
+        {'category': category, 'definition': prompt}
+        for category, prompt in category_prompts.items()
+        if category != 'Others'
+    ]
+    valid_ids = {item['id'] for item in context}
+    valid_categories = set(category_prompts)
+    request_body = json.dumps({
+        'model': OLLAMA_MODEL,
+        'stream': False,
+        'format': {
+            'type': 'object',
+            'properties': {
+                'classifications': {
+                    'type': 'array',
+                    'items': {
+                        'type': 'object',
+                        'properties': {
+                            'id': {'type': 'string', 'enum': sorted(valid_ids)},
+                            'category': {'type': 'string', 'enum': sorted(valid_categories)},
+                            'confidence': {'type': 'number', 'minimum': 0, 'maximum': 1},
+                            'reason': {'type': 'string'},
+                        },
+                        'required': ['id', 'category', 'confidence', 'reason'],
+                        'additionalProperties': False,
+                    },
+                    'maxItems': len(context),
+                },
+            },
+            'required': ['classifications'],
+            'additionalProperties': False,
+        },
+        'options': {'temperature': 0, 'num_predict': 512, 'num_ctx': 8192},
+        'messages': [
+            {
+                'role': 'system',
+                'content': (
+                    'You classify local image records. Use only the supplied OCR, caption, '
+                    'filename, visual candidate scores, and category definitions. Return a '
+                    'classification only when evidence supports it; use Others when evidence '
+                    'is genuinely insufficient. Never invent OCR or objects. IDs and category '
+                    'names must be copied exactly.'
+                ),
+            },
+            {'role': 'user', 'content': json.dumps({'categories': category_context, 'records': context})},
+        ],
+    }).encode('utf-8')
+    request = Request(
+        f'{OLLAMA_URL.rstrip("/")}/api/chat',
+        data=request_body,
+        headers={'Content-Type': 'application/json'},
+        method='POST',
+    )
+    try:
+        with urlopen(request, timeout=CLASSIFICATION_TIMEOUT_SECONDS) as response:
+            payload = json.loads(response.read().decode('utf-8'))
+        parsed = json.loads(payload.get('message', {}).get('content', ''))
+        classifications = []
+        for item in parsed.get('classifications', []):
+            if not isinstance(item, dict):
+                continue
+            item_id = str(item.get('id', ''))
+            category = item.get('category')
+            confidence = float(item.get('confidence', 0))
+            if item_id not in valid_ids or category not in valid_categories or confidence < 0.65:
+                continue
+            classifications.append({
+                'id': item_id,
+                'category': category,
+                'confidence': round(confidence, 4),
+                'reason': str(item.get('reason') or '')[:300],
+            })
+        return {'status': 'used', 'model': OLLAMA_MODEL, 'classifications': classifications}
+    except (HTTPError, URLError, TimeoutError, OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
+        if isinstance(exc, HTTPError) and exc.code == 404:
+            detail = f"Local model '{OLLAMA_MODEL}' is unavailable; pull it with `ollama pull {OLLAMA_MODEL}`."
+        elif isinstance(exc, URLError):
+            detail = 'Local Ollama is unavailable; conservative classification was retained.'
+        else:
+            detail = f'Local LLM classification failed: {exc}'
+        return {'status': 'unavailable', 'model': OLLAMA_MODEL, 'detail': detail, 'classifications': []}

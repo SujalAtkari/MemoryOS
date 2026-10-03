@@ -10,6 +10,7 @@ class ClassificationRequest(BaseModel):
     folder_path: str = Field(..., min_length=1)
     force: bool = False
     record_id: str | None = None
+    use_llm: bool = False
 
 
 class ClassificationApprovalRequest(BaseModel):
@@ -25,6 +26,7 @@ def process_classification_endpoint(payload: ClassificationRequest):
             payload.folder_path,
             force=payload.force,
             record_id=payload.record_id,
+            use_llm=payload.use_llm,
         )
     except (ValueError, FileNotFoundError, PermissionError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
