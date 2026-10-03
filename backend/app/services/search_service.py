@@ -127,7 +127,13 @@ def _record_embedding(record: dict) -> np.ndarray | None:
 
 
 def _category_text(record: dict) -> str:
-    values = [record.get('category'), *record.get('secondary_categories', [])]
+    values = [
+        record.get('category'),
+        record.get('subcategory'),
+        *record.get('secondary_categories', []),
+        *record.get('keywords', []),
+        *record.get('phrases', []),
+    ]
     matched_keywords = record.get('matched_keywords')
     if isinstance(matched_keywords, dict):
         for entries in matched_keywords.values():
@@ -160,6 +166,7 @@ def search_images(
     query: str,
     folder_path: str | None = None,
     category: str | None = None,
+    important_only: bool = False,
     limit: int = 20,
     min_score: float = 0.0,
     use_llm: bool = True,
@@ -181,6 +188,8 @@ def search_images(
     query_vector /= query_norm
     query_tokens = _tokens(query)
     expanded_query_tokens = _expanded_query_tokens(query_tokens)
+    if 'important' in query_tokens:
+        important_only = True
     configured_weights = config.weights()
     allowed_category = category.strip().casefold() if category and category.strip() else None
 
@@ -198,6 +207,8 @@ def search_images(
             }:
                 continue
             if record.get('ai_processing_status') == 'failed':
+                continue
+            if important_only and record.get('is_important') is not True:
                 continue
             image_path = _record_image_path(library_root, record)
             if not image_path.is_file():
@@ -375,6 +386,10 @@ def search_images(
             'filename': record.get('filename', Path(candidate['relative_path']).name),
             'relative_path': candidate['relative_path'],
             'category': record.get('category'),
+            'subcategory': record.get('subcategory'),
+            'is_important': record.get('is_important') is True,
+            'keywords': record.get('keywords', []),
+            'phrases': record.get('phrases', []),
             'classification_confidence': record.get('classification_confidence'),
             'semantic_score': round(cosine, 6) if cosine is not None else None,
             'lexical_score': round(candidate['lexical_score'], 6),

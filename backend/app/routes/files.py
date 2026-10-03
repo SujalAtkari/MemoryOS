@@ -35,6 +35,7 @@ class MoveRequest(IndexedFileRequest):
 
 class DeleteRequest(IndexedFileRequest):
     confirm: bool
+    confirm_protected: bool = False
 
 
 def _raise_file_error(exc: FileOperationError) -> None:
@@ -131,6 +132,7 @@ def delete_file_endpoint(payload: DeleteRequest):
             payload.library_id,
             payload.record_id,
             payload.confirm,
+            payload.confirm_protected,
         )
     except FileOperationError as exc:
         _raise_file_error(exc)

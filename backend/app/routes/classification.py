@@ -17,6 +17,8 @@ class ClassificationApprovalRequest(BaseModel):
     folder_path: str = Field(..., min_length=1)
     record_id: str = Field(..., min_length=1)
     category: str = Field(..., min_length=1)
+    subcategory: str | None = None
+    previous_category: str | None = None
 
 
 @router.post('/process')
@@ -39,6 +41,8 @@ def approve_classification_endpoint(payload: ClassificationApprovalRequest):
             payload.folder_path,
             payload.record_id,
             payload.category,
+            subcategory=payload.subcategory,
+            previous_category=payload.previous_category,
         )
     except (ValueError, FileNotFoundError, PermissionError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

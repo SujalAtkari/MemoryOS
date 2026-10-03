@@ -10,6 +10,7 @@ from app.routes.health import router as health_router
 from app.routes.lifecycle import router as lifecycle_router
 from app.routes.library import router as library_router
 from app.routes.search import router as search_router
+from app.routes.records import router as records_router
 
 app = FastAPI(
     title='MemoryOS backend',
@@ -34,6 +35,7 @@ app.include_router(duplicates_router)
 app.include_router(dashboard_router)
 app.include_router(files_router)
 app.include_router(lifecycle_router)
+app.include_router(records_router)
 
 
 @app.get('/')

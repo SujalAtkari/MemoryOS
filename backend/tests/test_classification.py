@@ -110,11 +110,11 @@ def test_conflicting_strong_evidence_is_assigned_to_others():
     )
     result = classify_record(record)
 
-    assert result['classification_status'] == 'classified'
-    assert result['category'] == 'Others'
+    assert result['classification_status'] == 'needs_review'
+    assert result['category'] == 'Bills & Receipts'
     assert any('different categories' in reason for reason in result['classification_reason'])
-    assert result['review_reasons'] == []
-    assert result['assignment_reason'] == 'Evidence sources conflict; assigned to Others.'
+    assert 'conflicting_evidence' in result['review_reasons']
+    assert result['assignment_reason'] == 'Evidence is weak or conflicting; needs review.'
     assert result['conflicting_sources']
 
 
@@ -136,10 +136,10 @@ def test_close_semantic_categories_need_review(monkeypatch, tmp_path):
 
     result = classify_record(record, classification_service._semantic_category_scores(record))
 
-    assert result['classification_status'] == 'classified'
-    assert result['category'] == 'Others'
-    assert result['review_reasons'] == []
-    assert result['assignment_reason'] == 'Leading categories are too close; assigned to Others.'
+    assert result['classification_status'] == 'needs_review'
+    assert result['category'] == 'Government & Identity'
+    assert 'close_category_scores' in result['review_reasons']
+    assert result['assignment_reason'] == 'Evidence is weak or conflicting; needs review.'
 
 
 def test_categories_with_clear_relative_lead_are_classified(monkeypatch, tmp_path):
@@ -182,9 +182,9 @@ def test_similarly_scored_categories_are_assigned_to_others(monkeypatch, tmp_pat
 
     result = classify_record(record, classification_service._semantic_category_scores(record))
 
-    assert result['classification_status'] == 'classified'
-    assert result['category'] == 'Others'
-    assert result['review_reasons'] == []
+    assert result['classification_status'] == 'needs_review'
+    assert result['category'] == 'Food & Drinks'
+    assert 'close_category_scores' in result['review_reasons']
 
 
 def test_clear_semantic_winner_is_classified(monkeypatch, tmp_path):
@@ -222,9 +222,9 @@ def test_weak_category_evidence_is_assigned_to_others(monkeypatch, tmp_path):
 
     result = classify_record(record, scores)
 
-    assert result['classification_status'] == 'classified'
-    assert result['category'] == 'Others'
-    assert 'Weak evidence' in result['assignment_reason']
+    assert result['classification_status'] == 'needs_review'
+    assert result['category'] == 'Food & Drinks'
+    assert result['assignment_reason'] == 'Evidence is weak or conflicting; needs review.'
 
 
 def test_specific_visual_concept_breaks_food_category_tie():
@@ -436,6 +436,46 @@ def test_reviewed_image_can_be_assigned_to_any_category(tmp_path, classification
 
     assert result['classification_status'] == 'classified'
     assert result['category'] == 'Animals & Pets'
+
+
+def test_manual_classification_is_preserved_on_reindex(tmp_path, classification_index):
+    library = tmp_path / 'library'
+    library.mkdir()
+    library_id = library_service._library_id_for_path(str(library.resolve()))
+    classification_index.parent.mkdir(parents=True, exist_ok=True)
+    classification_index.write_text(json.dumps({
+        'version': 1,
+        'libraries': {
+            library_id: {
+                'library_root': str(library.resolve()),
+                'records': {
+                    'unclear.jpg': {
+                        'record_id': 'unclear.jpg',
+                        'filename': 'unclear.jpg',
+                        'relative_path': 'unclear.jpg',
+                        'file_status': 'available',
+                        'sha256': 'unclear-hash',
+                        'category': 'Others',
+                        'classification_status': 'classified',
+                        'classification_source': 'manual',
+                        'manual_classification': True,
+                        'subcategory': 'Certificate',
+                        'previous_category': 'Others',
+                        'classification_reason': ['Manual override'],
+                    },
+                },
+            },
+        },
+    }), encoding='utf-8')
+
+    result = process_library_classification(str(library))
+
+    assert result['skipped'] == 1
+    saved = json.loads(classification_index.read_text(encoding='utf-8'))
+    record = saved['libraries'][library_id]['records']['unclear.jpg']
+    assert record['category'] == 'Others'
+    assert record['classification_source'] == 'manual'
+    assert record['manual_classification'] is True
 
 
 def test_classification_service_records_failure_without_invalidating_index(

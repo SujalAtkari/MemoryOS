@@ -433,11 +433,18 @@ def move_indexed_image(
 
 
 @serialize_index_update
-def delete_indexed_image(library_id: str, record_id: str, confirm: bool) -> dict:
+def delete_indexed_image(
+    library_id: str,
+    record_id: str,
+    confirm: bool,
+    confirm_protected: bool = False,
+) -> dict:
     if confirm is not True:
         raise FileOperationError('Explicit confirmation is required to delete the original image.')
     index = _load_index()
     library, root, relative_path, record = _find_record(index, library_id, record_id)
+    if record.get('protection_status') == 'protected' and confirm_protected is not True:
+        raise FileOperationError('Protected image deletion requires explicit confirmation.')
     source = _ensure_supported_source(root, relative_path, record)
     file_stats = source.lstat()
     if not stat.S_ISREG(file_stats.st_mode):

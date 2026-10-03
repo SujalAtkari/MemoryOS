@@ -11,6 +11,8 @@ from app.services.embedding_service import encode_text_embeddings
 from app.services.index_storage import save_json_atomically, serialize_index_update
 from app.services.library_service import INDEX_PATH, validate_folder_path
 from app.services.local_llm_service import classify_ambiguous_records
+from app.services.taxonomy import infer_subcategory, valid_subcategory
+from app.services.text_extraction_service import extract_keywords_and_phrases
 
 CLASSIFICATION_VERSION = 'phase3-multi-evidence-v6'
 SEMANTIC_TEMPERATURE = 0.08
@@ -381,9 +383,9 @@ def classify_record(
     insufficient_evidence = not source_scores or max(category_scores.values(), default=0.0) == 0
     close_scores = top_score <= 0 or alternative_score / top_score >= config.close_category_ratio
     weak_evidence = top_score < config.minimum_category_score
-    needs_fallback = insufficient_evidence or conflict or close_scores or weak_evidence
-    status = 'classified'
-    category = 'Others' if needs_fallback else top_category
+    needs_review = not insufficient_evidence and (conflict or close_scores or weak_evidence)
+    status = 'needs_review' if needs_review else 'classified'
+    category = 'Others' if insufficient_evidence else top_category
 
     matched_keywords = {
         'filename': filename_matches,
@@ -453,15 +455,34 @@ def classify_record(
             f"Runner-up category score is within {config.close_category_ratio:.0%} "
             'of the leading category'
         )
-    if needs_fallback:
-        reasons.append('Assigned to Others because the available evidence is ambiguous or insufficient')
+    if needs_review:
+        reasons.append('Needs review because the available evidence is weak or conflicting')
     if secondary_categories:
         reasons.append(f"Secondary evidence also supports {', '.join(secondary_categories)}")
+
+    review_reasons = []
+    if conflict:
+        review_reasons.append('conflicting_evidence')
+    if close_scores:
+        review_reasons.append('close_category_scores')
+    if weak_evidence and not insufficient_evidence:
+        review_reasons.append('weak_evidence')
+
+    evidence_text = (
+        f"{record.get('filename', '')} {record.get('relative_path', '')} "
+        f"{ocr_text} {record.get('caption') or ''}"
+    )
+    subcategory = infer_subcategory(category, evidence_text) if category != 'Others' else None
+    keywords, phrases = extract_keywords_and_phrases(
+        record.get('filename'), ocr_text, record.get('caption'), *reasons
+    )
 
     confidence = round(float(top_score), 4)
     assignment_reason = (
         'Insufficient evidence; assigned to Others.'
         if insufficient_evidence
+        else 'Evidence is weak or conflicting; needs review.'
+        if needs_review
         else f'Weak evidence (score below {config.minimum_category_score:.2f}); assigned to Others.'
         if weak_evidence
         else 'Evidence sources conflict; assigned to Others.'
@@ -472,8 +493,16 @@ def classify_record(
     )
     return {
         'category': category,
+        'subcategory': subcategory,
         'confidence': confidence,
         'classification_confidence': confidence,
+        'second_category': alternative_category,
+        'second_category_score': round(float(alternative_score), 4),
+        'score_difference': round(float(top_score - alternative_score), 4),
+        'classification_source': 'automatic',
+        'classification_evidence': reasons,
+        'keywords': keywords,
+        'phrases': phrases,
         'top_category': top_category,
         'top_score': round(float(top_score), 4),
         'alternative_category': alternative_category,
@@ -484,7 +513,7 @@ def classify_record(
         'classification_sha256': record.get('sha256'),
         'classification_reason': reasons,
         'assignment_reason': assignment_reason,
-        'review_reasons': [],
+        'review_reasons': review_reasons,
         'conflicting_sources': sorted(
             source for source, winner in evidence_source_winners.items()
             if winner[0] != top_category
@@ -520,9 +549,23 @@ def _outputs_are_valid(record: dict) -> bool:
     )
 
 
+def _has_manual_override(record: dict) -> bool:
+    if not isinstance(record, dict):
+        return False
+    return bool(record.get('manual_classification') or record.get('classification_source') == 'manual')
+
+
 def _classification_response(relative_path: str, record: dict) -> dict:
     fields = (
         'category',
+        'subcategory',
+        'classification_source',
+        'classification_evidence',
+        'keywords',
+        'phrases',
+        'second_category',
+        'second_category_score',
+        'score_difference',
         'classification_status',
         'classification_confidence',
         'classification_reason',
@@ -552,6 +595,10 @@ def _classification_response(relative_path: str, record: dict) -> dict:
     )
     return {
         'relative_path': relative_path,
+        'subcategory': record.get('subcategory'),
+        'manual_classification': record.get('manual_classification'),
+        'classification_source': record.get('classification_source'),
+        'previous_category': record.get('previous_category'),
         **{field: record.get(field) for field in fields},
     }
 
@@ -589,6 +636,11 @@ def process_library_classification(
             skipped += 1
             continue
         total += 1
+        if _has_manual_override(record):
+            skipped += 1
+            classified += 1
+            classifications.append(_classification_response(relative_path, record))
+            continue
         if (
             not force
             and not use_llm
@@ -606,7 +658,10 @@ def process_library_classification(
             result = classify_record(record, semantic_scores, semantic_concepts, config)
             record.update(result)
             classifications.append(_classification_response(relative_path, record))
-            classified += 1
+            if result.get('classification_status') == 'needs_review':
+                needs_review += 1
+            else:
+                classified += 1
         except Exception as exc:
             record.update({
                 'category': None,
@@ -703,6 +758,8 @@ def approve_classification(
     folder_path: str,
     record_id: str,
     category: str,
+    subcategory: str | None = None,
+    previous_category: str | None = None,
 ) -> dict:
     library_root = validate_folder_path(folder_path)
     if category not in CATEGORY_PROMPTS:
@@ -721,15 +778,39 @@ def approve_classification(
     if record.get('file_status') == 'missing':
         raise ValueError('Cannot approve a missing image.')
 
+    current_category = record.get('category')
+    normalized_previous = (
+        previous_category
+        if isinstance(previous_category, str) and previous_category in CATEGORY_PROMPTS
+        else current_category if isinstance(current_category, str) and current_category in CATEGORY_PROMPTS else None
+    )
+    normalized_subcategory = None
+    if isinstance(subcategory, str):
+        trimmed = subcategory.strip()
+        if trimmed and not valid_subcategory(category, trimmed):
+            raise ValueError('Invalid subcategory for the selected classification category.')
+        normalized_subcategory = trimmed or None
+
     record.update({
         'category': category,
+        'subcategory': normalized_subcategory,
+        'previous_category': normalized_previous,
         'classification_status': 'classified',
+        'classification_source': 'manual',
+        'manual_classification': True,
         'classification_error': None,
         'review_reasons': [],
         'classification_reason': [
             *(record.get('classification_reason') or []),
-            f'Category approved by the user: {category}',
+            f'User reassigned this image from {normalized_previous or "an unassigned category"} to {category}.',
         ],
+        'assignment_reason': (
+            f'User manual override: reassigned from {normalized_previous or "unclassified"} to {category}.'
+            if normalized_previous and normalized_previous != category
+            else f'User assigned this image to {category}.'
+        ),
+        'classification_confidence': 1.0,
+        'confidence': 1.0,
         'classification_sha256': record.get('sha256'),
         'classification_version': CLASSIFICATION_VERSION,
     })

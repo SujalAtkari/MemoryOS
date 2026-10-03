@@ -10,6 +10,22 @@ from app.services.metadata_service import extract_image_metadata
 INDEX_DIR = Path(__file__).resolve().parents[3] / 'data' / 'index'
 INDEX_PATH = INDEX_DIR / 'library_index.json'
 
+_PRESERVED_RECORD_FIELDS = (
+    'category',
+    'subcategory',
+    'classification_source',
+    'manual_classification',
+    'previous_category',
+    'importance_score',
+    'importance_status',
+        'is_important',
+        'importance_marked_at',
+    'importance_source',
+    'protection_status',
+    'protection_source',
+    'lifecycle_status',
+)
+
 
 def _library_id_for_path(folder_path: str) -> str:
     normalized = os.path.normpath(folder_path)
@@ -91,6 +107,10 @@ def scan_library(folder_path: str) -> dict:
                         **metadata,
                         'file_status': 'available',
                         'processing_status': 'pending',
+                        'classification_status': 'pending',
+                        'importance_status': 'normal',
+                        'protection_status': 'unprotected',
+                        'lifecycle_status': 'keep',
                     }
                     library_index['records'][relative_path] = record
                     new_images += 1
@@ -112,6 +132,9 @@ def scan_library(folder_path: str) -> dict:
                         'file_status': 'modified',
                         'processing_status': 'pending',
                     }
+                    for field in _PRESERVED_RECORD_FIELDS:
+                        if field in existing:
+                            record[field] = existing[field]
                     library_index['records'][relative_path] = record
                     updated_images += 1
                 else:

@@ -45,6 +45,9 @@ def _empty_stats() -> dict:
                 for category in CATEGORIES
             ],
         },
+        'importance': {status: 0 for status in ('critical', 'important', 'normal', 'low')},
+        'protected_images': 0,
+        'lifecycle': {status: 0 for status in ('keep', 'review', 'archive', 'delete')},
         'duplicates': {
             'groups': 0,
             'exact_groups': 0,
@@ -164,6 +167,16 @@ def _summarize_library(library_id: str, library: dict) -> dict:
             file_status = 'unverified'
         stats['file_status'][file_status] += 1
 
+        importance_status = record.get('importance_status')
+        if record.get('is_important') is True:
+            stats['importance']['important'] += 1
+        else:
+            stats['importance'][importance_status if importance_status in stats['importance'] else 'normal'] += 1
+        if record.get('protection_status') == 'protected':
+            stats['protected_images'] += 1
+        lifecycle_status = record.get('lifecycle_status')
+        stats['lifecycle'][lifecycle_status if lifecycle_status in stats['lifecycle'] else 'keep'] += 1
+
         category = record.get('category')
         if classification_status == 'classified':
             stats['categories']['total_classified'] += 1
@@ -250,6 +263,11 @@ def get_dashboard_stats(folder_path: str | None = None) -> dict:
             combined['classification'][key] += count
         for key, count in library['file_status'].items():
             combined['file_status'][key] += count
+        for key, count in library['importance'].items():
+            combined['importance'][key] += count
+        combined['protected_images'] += library['protected_images']
+        for key, count in library['lifecycle'].items():
+            combined['lifecycle'][key] += count
         combined['categories']['total_classified'] += library['categories']['total_classified']
         combined['categories']['classified_without_category'] += library['categories']['classified_without_category']
         for item in library['categories']['distribution']:

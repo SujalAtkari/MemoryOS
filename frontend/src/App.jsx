@@ -18,9 +18,27 @@ const SEARCH_CATEGORIES = [
   'Notes & Documents',
   'Others',
 ];
+const MANUAL_CATEGORY_OPTIONS = SEARCH_CATEGORIES.filter((category) => category !== 'Others');
+const MANUAL_SUBCATEGORIES = {
+  'Government & Identity': ['Aadhaar', 'PAN', 'Passport', 'Driving Licence', 'Voter ID', 'Government Document', 'Identity Document', 'Other Identity'],
+  Education: ['Certificate', 'Marksheet', 'Academic Transcript', 'Notes', 'Assignment', 'Examination', 'Result', 'College Document', 'Other Education'],
+  'Medical & Health': ['Medical Report', 'Prescription', 'Lab Report', 'Medical Bill', 'Health Record', 'Appointment', 'Other Medical'],
+  Finance: ['Bank Statement', 'Passbook', 'Credit Card', 'Investment', 'Mutual Fund', 'Demat', 'Insurance', 'Loan', 'Tax', 'Salary / Income', 'Financial Certificate', 'Other Finance'],
+  'Bills & Receipts': ['Shopping', 'Electricity', 'Internet', 'Mobile', 'Restaurant', 'Grocery', 'Online Order', 'Invoice', 'Payment Receipt', 'Other Bill'],
+  'Work & Professional': ['Work Report', 'Project Document', 'Meeting Notes', 'Presentation', 'Resume / CV', 'Offer Letter', 'Internship Document', 'Professional Certificate', 'Client Document', 'Other Work'],
+  Travel: ['Flight Ticket', 'Train Ticket', 'Bus Ticket', 'Boarding Pass', 'Hotel', 'Travel Booking', 'Travel Document', 'Itinerary', 'Map / Directions', 'Destination Photo', 'Travel Activity', 'Travel Receipt', 'Other Travel'],
+  'Events & Celebrations': ['Birthday', 'Wedding', 'Festival', 'College Event', 'Party', 'Ceremony', 'Invitation', 'Other Event'],
+  'People & Family': ['Family', 'Friends', 'Portrait', 'Group Photo', 'Personal Memory', 'Other People'],
+  'Nature & Places': ['Landscape', 'Beach', 'Mountain', 'City', 'Building', 'Monument', 'Nature', 'Sunset', 'Other Place'],
+  'Animals & Pets': ['Dog', 'Cat', 'Bird', 'Pet', 'Wildlife', 'Other Animal'],
+  'Food & Drinks': ['Food', 'Restaurant', 'Dessert', 'Beverage', 'Recipe', 'Menu', 'Other Food'],
+  Screenshots: ['App Screenshot', 'Website Screenshot', 'Chat Screenshot', 'Social Media Screenshot', 'Error Screenshot', 'Code Screenshot', 'UI / Design Screenshot', 'Other Screenshot'],
+  'Notes & Documents': ['Notes', 'Text Document', 'Form', 'Letter', 'General Document', 'Reference', 'Other Document'],
+};
 const PAGE_LINKS = [
   { id: 'dashboard', label: 'Dashboard' },
   { id: 'library', label: 'My Library' },
+  { id: 'important', label: 'Important' },
   { id: 'processing', label: 'AI Workspace' },
   { id: 'search', label: 'Search' },
   { id: 'duplicates', label: 'Duplicates' },
@@ -32,7 +50,7 @@ const SIDEBAR_ITEMS = [
   { id: 'search', label: 'Search', target: 'search' },
   { id: 'categories', label: 'Categories', target: 'processing' },
   { id: 'duplicates', label: 'Duplicates', target: 'duplicates' },
-  { id: 'important', label: 'Important', target: 'search' },
+  { id: 'important', label: 'Important', target: 'important' },
   { id: 'review', label: 'Needs Review', target: 'health' },
   { id: 'processing', label: 'Processing', target: 'processing' },
   { id: 'settings', label: 'Settings', target: 'health' },
@@ -153,6 +171,7 @@ function App() {
   const [classificationLoading, setClassificationLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchCategory, setSearchCategory] = useState('');
+  const [importantOnly, setImportantOnly] = useState(false);
   const [searchResult, setSearchResult] = useState(null);
   const [searchLoading, setSearchLoading] = useState(false);
   const [duplicateResult, setDuplicateResult] = useState(null);
@@ -173,6 +192,10 @@ function App() {
   const [lifecycleError, setLifecycleError] = useState('');
   const [intelligenceRecord, setIntelligenceRecord] = useState(null);
   const [intelligenceLibraryId, setIntelligenceLibraryId] = useState('');
+  const [manualCategoryOverride, setManualCategoryOverride] = useState('Education');
+  const [manualSubcategoryOverride, setManualSubcategoryOverride] = useState('');
+  const [manualCategoryBusy, setManualCategoryBusy] = useState(false);
+  const [recordStateBusy, setRecordStateBusy] = useState(false);
   const [showLaunchScreen, setShowLaunchScreen] = useState(true);
 
   const displayedImages = useMemo(() => {
@@ -180,8 +203,11 @@ function App() {
       return [];
     }
 
-    return scanResult.image_records.slice(0, MAX_VISIBLE_RECORDS);
-  }, [scanResult]);
+    const records = currentPage === 'important'
+      ? scanResult.image_records.filter((image) => image.is_important === true)
+      : scanResult.image_records;
+    return records.slice(0, MAX_VISIBLE_RECORDS);
+  }, [currentPage, scanResult]);
 
   const categoryGroups = useMemo(() => {
     const groups = Object.fromEntries(SEARCH_CATEGORIES.map((category) => [category, []]));
@@ -258,7 +284,169 @@ function App() {
   const showIntelligence = (record, libraryId) => {
     setIntelligenceRecord(record);
     setIntelligenceLibraryId(libraryId || record.library_id || scanResult?.library_id || '');
+    const nextCategory = record?.category === 'Others' ? 'Education' : (record?.category || 'Education');
+    setManualCategoryOverride(nextCategory);
+    const options = MANUAL_SUBCATEGORIES[nextCategory] ?? [];
+    setManualSubcategoryOverride(options.includes(record?.subcategory) ? record.subcategory : '');
   };
+
+  const applyManualCategoryOverride = async () => {
+    if (!intelligenceRecord || !intelligenceLibraryId || !manualCategoryOverride) {
+      return;
+    }
+
+    const normalizedLibraryPath = scanResult?.library_root || folderPath;
+    if (!normalizedLibraryPath.trim()) {
+      setError('Scan a library before updating a category override.');
+      return;
+    }
+
+    setManualCategoryBusy(true);
+    setError('');
+    setStatus('Updating category assignment...');
+    try {
+      const response = await fetch('http://localhost:8000/classification/approve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          folder_path: normalizedLibraryPath,
+          record_id: intelligenceRecord.record_id || intelligenceRecord.relative_path,
+          category: manualCategoryOverride,
+          subcategory: manualSubcategoryOverride || null,
+          previous_category: intelligenceRecord.category || 'Others',
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(getResponseError(data, 'Unable to save the manual category override.'));
+      }
+
+      const updatedRecord = { ...intelligenceRecord, ...data, category: data.category || manualCategoryOverride };
+      setIntelligenceRecord(updatedRecord);
+      setScanResult((previous) => previous ? {
+        ...previous,
+        image_records: previous.image_records.map((image) => (
+          image.record_id === updatedRecord.record_id || image.relative_path === updatedRecord.relative_path
+            ? { ...image, ...updatedRecord }
+            : image
+        )),
+      } : previous);
+      setSearchResult((previous) => previous ? {
+        ...previous,
+        results: previous.results.map((image) => (
+          image.record_id === updatedRecord.record_id || image.relative_path === updatedRecord.relative_path
+            ? { ...image, ...updatedRecord }
+            : image
+        )),
+      } : previous);
+      setClassificationResult((previous) => previous ? {
+        ...previous,
+        classifications: (previous.classifications ?? []).map((image) => (
+          image.record_id === updatedRecord.record_id || image.relative_path === updatedRecord.relative_path
+            ? { ...image, ...updatedRecord }
+            : image
+        )),
+      } : previous);
+      setStatus(`Manual category saved: ${manualCategoryOverride}.`);
+      await refreshDashboard(normalizedLibraryPath);
+    } catch (manualError) {
+      const message = getRequestError(manualError, 'Manual category update failed.');
+      setError(message);
+      setStatus('Manual category update failed.');
+    } finally {
+      setManualCategoryBusy(false);
+    }
+  };
+
+  const updateRecordState = async (changes) => {
+    if (!intelligenceRecord || !intelligenceLibraryId || !scanResult?.library_id) {
+      return;
+    }
+    setRecordStateBusy(true);
+    setError('');
+    try {
+      const response = await fetch('http://localhost:8000/records/state', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          library_id: intelligenceLibraryId,
+          record_id: intelligenceRecord.record_id || intelligenceRecord.relative_path,
+          ...changes,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(getResponseError(data, 'Unable to update image state.'));
+      }
+      const updatedRecord = { ...intelligenceRecord, ...data.record };
+      setIntelligenceRecord(updatedRecord);
+      setScanResult((previous) => previous ? {
+        ...previous,
+        image_records: previous.image_records.map((image) => (
+          image.record_id === updatedRecord.record_id || image.relative_path === updatedRecord.relative_path
+            ? { ...image, ...updatedRecord }
+            : image
+        )),
+      } : previous);
+      await refreshDashboard(scanResult.library_root || folderPath);
+      setStatus('Image state saved locally.');
+    } catch (stateError) {
+      setError(getRequestError(stateError, 'Image state update failed.'));
+    } finally {
+      setRecordStateBusy(false);
+    }
+  };
+
+  const toggleImportant = async (record, libraryId, event) => {
+    event?.stopPropagation();
+    if (!record?.record_id || !libraryId) {
+      return;
+    }
+    const nextValue = record.is_important !== true;
+    try {
+      const response = await fetch('http://localhost:8000/records/state', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          library_id: libraryId,
+          record_id: record.record_id,
+          is_important: nextValue,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(getResponseError(data, 'Unable to update Important status.'));
+      }
+      const updatedRecord = { ...record, ...data.record, is_important: nextValue };
+      const matches = (image) => image.record_id === updatedRecord.record_id || image.relative_path === updatedRecord.relative_path;
+      setScanResult((previous) => previous ? {
+        ...previous,
+        image_records: previous.image_records.map((image) => matches(image) ? { ...image, ...updatedRecord } : image),
+      } : previous);
+      setSearchResult((previous) => previous ? {
+        ...previous,
+        results: previous.results.map((image) => matches(image) ? { ...image, ...updatedRecord } : image),
+      } : previous);
+      setStatus(nextValue ? 'Added to Important.' : 'Removed from Important.');
+      await refreshDashboard(scanResult?.library_root || folderPath);
+    } catch (importantError) {
+      setError(getRequestError(importantError, 'Important status could not be updated.'));
+    }
+  };
+
+  const importanceButton = (record, libraryId) => (
+    <button
+      type="button"
+      className={`importance-button${record.is_important === true ? ' importance-button-active' : ''}`}
+      aria-label={record.is_important === true ? 'Remove from important' : 'Mark as important'}
+      title={record.is_important === true ? 'Remove from important' : 'Mark as important'}
+      onClick={(event) => void toggleImportant(record, libraryId, event)}
+    >
+      {record.is_important === true ? '★' : '☆'}
+    </button>
+  );
+
+  const manualSubcategoryOptions = MANUAL_SUBCATEGORIES[manualCategoryOverride] ?? [];
 
   const imagePreview = (record, libraryId, className = '') => (
     <div className={`image-preview${className ? ` ${className}` : ''}`}>
@@ -629,6 +817,7 @@ function App() {
           query: searchQuery,
           folder_path: folderPath.trim() || null,
           category: searchCategory || null,
+          important_only: importantOnly,
           limit: 50,
           use_llm: true,
         }),
@@ -764,6 +953,8 @@ function App() {
       record_id: record.record_id,
       filename: record.filename,
       relative_path: record.relative_path,
+      is_important: record.is_important === true,
+      protection_status: record.protection_status || 'unprotected',
     });
     setFileActionType(action);
     if (action === 'rename') {
@@ -880,6 +1071,7 @@ function App() {
         library_id: fileActionRecord.library_id,
         record_id: fileActionRecord.record_id,
         confirm: true,
+        confirm_protected: fileActionRecord.protection_status === 'protected',
       });
     }
   };
@@ -1187,6 +1379,9 @@ function App() {
                   <div className="memory-summary-card"><span>AI processed</span><strong>{dashboardStats.processed_images.toLocaleString()}</strong><small>{dashboardStats.processing.pending.toLocaleString()} waiting to analyze</small></div>
                   <div className="memory-summary-card"><span>Duplicates found</span><strong>{dashboardStats.duplicates.records_in_groups.toLocaleString()}</strong><small>{dashboardStats.duplicates.groups.toLocaleString()} groups detected</small></div>
                   <div className="memory-summary-card"><span>Needs review</span><strong>{dashboardStats.classification.needs_review.toLocaleString()}</strong><small>Classification attention</small></div>
+                  <button type="button" className="memory-summary-card memory-summary-card-button" onClick={() => navigateToPage('important')}><span>Important</span><strong>{(dashboardStats.importance?.important ?? 0) + (dashboardStats.importance?.critical ?? 0)}</strong><small>High-priority memories</small></button>
+                  <div className="memory-summary-card"><span>Protected</span><strong>{(dashboardStats.protected_images ?? 0).toLocaleString()}</strong><small>Deletion protected</small></div>
+                  <div className="memory-summary-card"><span>Missing files</span><strong>{(dashboardStats.file_status?.missing ?? 0).toLocaleString()}</strong><small>Needs file verification</small></div>
                 </div>
 
                 <div className="memory-dashboard-grid">
@@ -1214,6 +1409,8 @@ function App() {
                       <div><dt>Skipped</dt><dd>{dashboardStats.processing.other.toLocaleString()}</dd></div>
                       <div><dt>Duplicates</dt><dd>{dashboardStats.duplicates.records_in_groups.toLocaleString()}</dd></div>
                       <div><dt>Needs review</dt><dd>{dashboardStats.classification.needs_review.toLocaleString()}</dd></div>
+                      <div><dt>Important</dt><dd>{((dashboardStats.importance?.important ?? 0) + (dashboardStats.importance?.critical ?? 0)).toLocaleString()}</dd></div>
+                      <div><dt>Protected</dt><dd>{(dashboardStats.protected_images ?? 0).toLocaleString()}</dd></div>
                       <div><dt>Failed</dt><dd>{dashboardStats.processing.failed.toLocaleString()}</dd></div>
                     </dl>
                   </section>
@@ -1503,6 +1700,18 @@ function App() {
           </section>
         ) : null}
 
+        {currentPage === 'important' ? (
+          <section className="page-section important-page" aria-labelledby="important-page-heading">
+            <div className="page-heading">
+              <p className="eyebrow">Your chosen memories</p>
+              <h2 id="important-page-heading">Important</h2>
+              <p>Images you marked with a star stay in your local Important collection.</p>
+            </div>
+            {!scanResult?.library_id ? <p className="helper-text">Scan a library to view Important images.</p> : null}
+            {scanResult?.library_id && !displayedImages.length ? <div className="empty-state">No important images yet. Star an image to keep it here.</div> : null}
+          </section>
+        ) : null}
+
         {currentPage === 'search' ? (
           <section className="page-section" aria-labelledby="search-page-heading">
             <div className="page-heading">
@@ -1529,6 +1738,10 @@ function App() {
               <option value="">All categories</option>
               {SEARCH_CATEGORIES.map((item) => <option key={item} value={item}>{item}</option>)}
             </select>
+          </label>
+          <label className="search-important-toggle">
+            <input type="checkbox" checked={importantOnly} onChange={(event) => setImportantOnly(event.target.checked)} />
+            <span>Important only</span>
           </label>
           <button type="submit" className="primary-button" disabled={searchLoading}>
             {searchLoading ? 'Searching...' : 'Search'}
@@ -1557,6 +1770,7 @@ function App() {
             </div>
             {searchResult.results.length ? searchResult.results.map((result) => (
               <article className="search-result-card" key={`${result.library_id}:${result.relative_path}`}>
+                {importanceButton(result, result.library_id)}
                 {imagePreview(result, result.library_id)}
                 <div className="image-meta">
                   <strong>{result.filename}</strong>
@@ -1599,8 +1813,8 @@ function App() {
                 </div>
               </article>
             )) : (
-              <div className="empty-state">
-                <strong>No matching images found.</strong>
+                    <>Are you sure you want to delete this image from its original location.</>
+                  )}
                 <span>Try another keyword or natural-language query.</span>
               </div>
             )}
@@ -1677,12 +1891,13 @@ function App() {
           </section>
         ) : null}
 
-        {currentPage === 'library' ? <div className="library-grid">
+        {['library', 'important'].includes(currentPage) ? <div className="library-grid">
           {displayedImages.length ? (
             <>
               <div className="grid-meta">Showing first {displayedImages.length} of {scanResult.image_records.length} records</div>
               {displayedImages.map((image) => (
                 <article className="image-card" key={image.relative_path}>
+                  {importanceButton(image, scanResult.library_id)}
                   {imagePreview(image, scanResult.library_id)}
                   <div className="image-meta">
                     <strong>{image.filename}</strong>
@@ -1759,9 +1974,22 @@ function App() {
               ) : null}
               {fileActionType === 'delete' ? (
                 <div className="delete-warning">
-                  This will permanently delete the selected file from your local computer. This cannot be undone.
+                  {fileActionRecord.is_important && fileActionRecord.protection_status === 'protected' ? (
+                    <>
+                      <strong>★ This image is marked Important and Protected.</strong>
+                      <br />
+                      Are you sure you want to permanently delete it? This removes the original file from your computer.
+                    </>
+                  ) : fileActionRecord.is_important ? (
+                    <>
+                      <strong>★ Important image.</strong>
+                      <br />
+                      You marked this image as important. Are you sure you want to delete the original file?
+                    </>
+                  ) : (
+                    <>Are you sure you want to delete this image from its original location?</n+                  )}
                   <br />
-                  <strong>Are you sure?</strong>
+                  This action cannot be undone.
                 </div>
               ) : null}
               {fileActionError ? <div className="error-box" role="alert">{fileActionError}</div> : null}
@@ -1783,7 +2011,10 @@ function App() {
           <div className="intelligence-backdrop" role="presentation" onClick={() => setIntelligenceRecord(null)}>
             <div className="intelligence-detail-panel" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
               <div className="intelligence-detail-header">
-                <h2 className="intelligence-detail-title">MemoryOS Intelligence</h2>
+                <div className="intelligence-title-row">
+                  <h2 className="intelligence-detail-title">MemoryOS Intelligence</h2>
+                  {importanceButton(intelligenceRecord, intelligenceLibraryId)}
+                </div>
                 <button
                   type="button"
                   className="intelligence-detail-close"
@@ -1796,6 +2027,90 @@ function App() {
 
               <div className="intelligence-detail-body">
                 {imagePreview(intelligenceRecord, intelligenceLibraryId, ' intelligence-preview')}
+
+                {intelligenceRecord.category === 'Others' || intelligenceRecord.classification_status === 'needs_review' ? (
+                  <div className="intelligence-section">
+                    <h3 className="intelligence-section-title">Manual category override</h3>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', alignItems: 'center' }}>
+                      <select
+                        value={manualCategoryOverride}
+                        onChange={(event) => {
+                          const category = event.target.value;
+                          setManualCategoryOverride(category);
+                          setManualSubcategoryOverride((MANUAL_SUBCATEGORIES[category] ?? []).includes(manualSubcategoryOverride) ? manualSubcategoryOverride : '');
+                        }}
+                        style={{ minWidth: '200px' }}
+                      >
+                        {MANUAL_CATEGORY_OPTIONS.map((category) => (
+                          <option key={category} value={category}>{category}</option>
+                        ))}
+                      </select>
+                      {manualSubcategoryOptions.length ? (
+                        <select
+                          value={manualSubcategoryOverride}
+                          onChange={(event) => setManualSubcategoryOverride(event.target.value)}
+                          style={{ minWidth: '180px' }}
+                        >
+                          <option value="">No subcategory</option>
+                          {manualSubcategoryOptions.map((subcategory) => (
+                            <option key={subcategory} value={subcategory}>{subcategory}</option>
+                          ))}
+                        </select>
+                      ) : null}
+                      <button
+                        type="button"
+                        className="primary-button"
+                        onClick={() => void applyManualCategoryOverride()}
+                        disabled={manualCategoryBusy}
+                      >
+                        {manualCategoryBusy ? 'Saving...' : 'Apply category'}
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+
+                <div className="intelligence-section">
+                  <h3 className="intelligence-section-title">Memory state</h3>
+                  <div style={{ display: 'grid', gap: '0.75rem' }}>
+                    <label className="dialog-input">
+                      <span>Importance</span>
+                      <select
+                        value={intelligenceRecord.importance_status || 'normal'}
+                        onChange={(event) => void updateRecordState({ importance_status: event.target.value })}
+                        disabled={recordStateBusy}
+                      >
+                        <option value="critical">Critical</option>
+                        <option value="important">Important</option>
+                        <option value="normal">Normal</option>
+                        <option value="low">Low</option>
+                      </select>
+                    </label>
+                    <label className="dialog-input">
+                      <span>Protection</span>
+                      <select
+                        value={intelligenceRecord.protection_status || 'unprotected'}
+                        onChange={(event) => void updateRecordState({ protection_status: event.target.value })}
+                        disabled={recordStateBusy}
+                      >
+                        <option value="unprotected">Unprotected</option>
+                        <option value="protected">Protected</option>
+                      </select>
+                    </label>
+                    <label className="dialog-input">
+                      <span>Lifecycle</span>
+                      <select
+                        value={intelligenceRecord.lifecycle_status || 'keep'}
+                        onChange={(event) => void updateRecordState({ lifecycle_status: event.target.value })}
+                        disabled={recordStateBusy}
+                      >
+                        <option value="keep">Keep</option>
+                        <option value="review">Review</option>
+                        <option value="archive">Archive</option>
+                        <option value="delete">Delete candidate</option>
+                      </select>
+                    </label>
+                  </div>
+                </div>
 
                 <div className="intelligence-section">
                   <h3 className="intelligence-section-title">Classification</h3>
