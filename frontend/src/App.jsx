@@ -196,6 +196,7 @@ function App() {
   const [manualSubcategoryOverride, setManualSubcategoryOverride] = useState('');
   const [manualCategoryBusy, setManualCategoryBusy] = useState(false);
   const [recordStateBusy, setRecordStateBusy] = useState(false);
+  const [importantBusyRecord, setImportantBusyRecord] = useState('');
   const [showLaunchScreen, setShowLaunchScreen] = useState(true);
 
   const displayedImages = useMemo(() => {
@@ -204,7 +205,9 @@ function App() {
     }
 
     const records = currentPage === 'important'
-      ? scanResult.image_records.filter((image) => image.is_important === true)
+      ? scanResult.image_records.filter((image) => (
+        image.is_important === true || ['critical', 'important'].includes(image.importance_status)
+      ))
       : scanResult.image_records;
     return records.slice(0, MAX_VISIBLE_RECORDS);
   }, [currentPage, scanResult]);
@@ -388,6 +391,14 @@ function App() {
             : image
         )),
       } : previous);
+      setSearchResult((previous) => previous ? {
+        ...previous,
+        results: previous.results.map((image) => (
+          image.record_id === updatedRecord.record_id || image.relative_path === updatedRecord.relative_path
+            ? { ...image, ...updatedRecord }
+            : image
+        )),
+      } : previous);
       await refreshDashboard(scanResult.library_root || folderPath);
       setStatus('Image state saved locally.');
     } catch (stateError) {
@@ -399,17 +410,21 @@ function App() {
 
   const toggleImportant = async (record, libraryId, event) => {
     event?.stopPropagation();
-    if (!record?.record_id || !libraryId) {
+    const recordId = record?.record_id || record?.relative_path;
+    if (!recordId || !libraryId) {
       return;
     }
-    const nextValue = record.is_important !== true;
+    const isImportant = record.is_important === true
+      || ['critical', 'important'].includes(record.importance_status);
+    const nextValue = !isImportant;
+    setImportantBusyRecord(recordId);
     try {
       const response = await fetch('http://localhost:8000/records/state', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           library_id: libraryId,
-          record_id: record.record_id,
+          record_id: recordId,
           is_important: nextValue,
         }),
       });
@@ -427,23 +442,52 @@ function App() {
         ...previous,
         results: previous.results.map((image) => matches(image) ? { ...image, ...updatedRecord } : image),
       } : previous);
+      setIntelligenceRecord((previous) => (
+        previous && matches(previous) ? { ...previous, ...updatedRecord } : previous
+      ));
       setStatus(nextValue ? 'Added to Important.' : 'Removed from Important.');
       await refreshDashboard(scanResult?.library_root || folderPath);
     } catch (importantError) {
       setError(getRequestError(importantError, 'Important status could not be updated.'));
+    } finally {
+      setImportantBusyRecord('');
     }
   };
 
-  const importanceButton = (record, libraryId) => (
-    <button
-      type="button"
-      className={`importance-button${record.is_important === true ? ' importance-button-active' : ''}`}
-      aria-label={record.is_important === true ? 'Remove from important' : 'Mark as important'}
-      title={record.is_important === true ? 'Remove from important' : 'Mark as important'}
-      onClick={(event) => void toggleImportant(record, libraryId, event)}
-    >
-      {record.is_important === true ? '★' : '☆'}
-    </button>
+  const importanceButton = (record, libraryId) => {
+    const isImportant = record.is_important === true
+      || ['critical', 'important'].includes(record.importance_status);
+    const recordId = record.record_id || record.relative_path;
+    return (
+      <button
+        type="button"
+        className={`importance-button${isImportant ? ' importance-button-active' : ''}`}
+        aria-label={isImportant ? 'Remove from important' : 'Mark as important'}
+        title={isImportant ? 'Remove from important' : 'Mark as important'}
+        aria-pressed={isImportant}
+        disabled={importantBusyRecord === recordId}
+        onClick={(event) => void toggleImportant(record, libraryId, event)}
+      >
+        {isImportant ? '★' : '☆'}
+      </button>
+    );
+  };
+
+  const importanceBadge = (record) => {
+    const status = record.importance_status;
+    if (status === 'critical') {
+      return <span className="image-badge badge-critical">Critical</span>;
+    }
+    if (record.is_important === true || status === 'important') {
+      return <span className="image-badge badge-important">Important</span>;
+    }
+    return null;
+  };
+
+  const classificationBadge = (record) => (
+    record.classification_status === 'needs_review'
+      ? <span className="image-badge badge-review">Needs review</span>
+      : null
   );
 
   const manualSubcategoryOptions = MANUAL_SUBCATEGORIES[manualCategoryOverride] ?? [];
@@ -1706,6 +1750,11 @@ function App() {
               <p className="eyebrow">Your chosen memories</p>
               <h2 id="important-page-heading">Important</h2>
               <p>Images you marked with a star stay in your local Important collection.</p>
+              {scanResult?.library_id ? (
+                <p className="important-count">
+                  {displayedImages.length} important image{displayedImages.length === 1 ? '' : 's'} in this library
+                </p>
+              ) : null}
             </div>
             {!scanResult?.library_id ? <p className="helper-text">Scan a library to view Important images.</p> : null}
             {scanResult?.library_id && !displayedImages.length ? <div className="empty-state">No important images yet. Star an image to keep it here.</div> : null}
@@ -1768,53 +1817,56 @@ function App() {
             <div className="grid-meta">
               Showing {searchResult.returned_results} of {searchResult.total_results} ranked results for “{searchResult.query}”
             </div>
-            {searchResult.results.length ? searchResult.results.map((result) => (
-              <article className="search-result-card" key={`${result.library_id}:${result.relative_path}`}>
-                {importanceButton(result, result.library_id)}
-                {imagePreview(result, result.library_id)}
-                <div className="image-meta">
-                  <strong>{result.filename}</strong>
-                  <span>{result.relative_path}</span>
-                  <div className="image-badges">
-                    <span className="image-badge">
-                      {result.category || 'Others'}
-                    </span>
-                    {result.file_status ? <span className="image-badge badge-muted">{result.file_status}</span> : null}
+            {searchResult.results.length ? (
+              searchResult.results.map((result) => (
+                <article className="search-result-card" key={`${result.library_id}:${result.relative_path}`}>
+                  {importanceButton(result, result.library_id)}
+                  {imagePreview(result, result.library_id)}
+                  <div className="image-meta">
+                    <strong>{result.filename}</strong>
+                    <span>{result.relative_path}</span>
+                    <div className="image-badges">
+                      {importanceBadge(result)}
+                      {classificationBadge(result)}
+                      <span className="image-badge">
+                        {result.category || 'Others'}
+                      </span>
+                      {result.file_status ? <span className="image-badge badge-muted">{result.file_status}</span> : null}
+                    </div>
+                    <div className="why-matched">
+                      <strong>Why this matched</strong>
+                      <span>
+                        {result.matched_fields?.length
+                          ? result.matched_fields.map((field) => ({
+                            filename: 'Filename',
+                            ocr: 'OCR text',
+                            caption: 'Caption',
+                            category: 'Category',
+                            metadata: 'Image metadata',
+                            category_filter: 'Category filter',
+                          })[field] || field).join(' · ')
+                          : 'No text fields matched; ranking includes visual similarity.'}
+                      </span>
+                      {result.matched_keywords?.length ? <span>Matched terms: {result.matched_keywords.join(', ')}</span> : null}
+                      {result.query_expansions?.length ? (
+                        <span>Related concepts considered: {result.query_expansions.join(', ')}</span>
+                      ) : null}
+                      <span>Visual meaning score: {Number(result.semantic_score).toFixed(3)}</span>
+                    </div>
+                    <details className="technical-details">
+                      <summary>Technical ranking details</summary>
+                      <span>Hybrid score: {Number(result.hybrid_score).toFixed(3)} · Semantic cosine: {Number(result.semantic_score).toFixed(3)}</span>
+                      <span>{result.search_reason}</span>
+                    </details>
+                    <button type="button" className="file-action-button" onClick={() => showIntelligence(result, result.library_id)}>
+                      MemoryOS Intelligence
+                    </button>
+                    {fileActions(result, result.library_id)}
                   </div>
-                  <div className="why-matched">
-                    <strong>Why this matched</strong>
-                    <span>
-                      {result.matched_fields?.length
-                        ? result.matched_fields.map((field) => ({
-                          filename: 'Filename',
-                          ocr: 'OCR text',
-                          caption: 'Caption',
-                          category: 'Category',
-                          metadata: 'Image metadata',
-                          category_filter: 'Category filter',
-                        })[field] || field).join(' · ')
-                        : 'No text fields matched; ranking includes visual similarity.'}
-                    </span>
-                    {result.matched_keywords?.length ? <span>Matched terms: {result.matched_keywords.join(', ')}</span> : null}
-                    {result.query_expansions?.length ? (
-                      <span>Related concepts considered: {result.query_expansions.join(', ')}</span>
-                    ) : null}
-                    <span>Visual meaning score: {Number(result.semantic_score).toFixed(3)}</span>
-                  </div>
-                  <details className="technical-details">
-                    <summary>Technical ranking details</summary>
-                    <span>Hybrid score: {Number(result.hybrid_score).toFixed(3)} · Semantic cosine: {Number(result.semantic_score).toFixed(3)}</span>
-                    <span>{result.search_reason}</span>
-                  </details>
-                  <button type="button" className="file-action-button" onClick={() => showIntelligence(result, result.library_id)}>
-                    MemoryOS Intelligence
-                  </button>
-                  {fileActions(result, result.library_id)}
-                </div>
-              </article>
-            )) : (
-                    <>Are you sure you want to delete this image from its original location.</>
-                  )}
+                </article>
+              ))
+            ) : (
+              <div className="empty-state">
                 <span>Try another keyword or natural-language query.</span>
               </div>
             )}
@@ -1903,6 +1955,8 @@ function App() {
                     <strong>{image.filename}</strong>
                     <span>{image.relative_path}</span>
                     <div className="image-badges">
+                      {importanceBadge(image)}
+                      {classificationBadge(image)}
                       <span className="image-badge">
                         {image.category ?? 'Others'}
                       </span>
@@ -1987,7 +2041,8 @@ function App() {
                       You marked this image as important. Are you sure you want to delete the original file?
                     </>
                   ) : (
-                    <>Are you sure you want to delete this image from its original location?</n+                  )}
+                    <>Are you sure you want to delete this image from its original location?</>
+                  )}
                   <br />
                   This action cannot be undone.
                 </div>

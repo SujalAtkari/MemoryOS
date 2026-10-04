@@ -118,6 +118,25 @@ def test_conflicting_strong_evidence_is_assigned_to_others():
     assert result['conflicting_sources']
 
 
+def test_clear_keyword_match_takes_precedence_over_visual_similarity():
+    record = make_record(
+        'passport.jpg',
+        'Government of India passport identity document',
+        '',
+    )
+    visual_scores = {
+        'Food & Drinks': 0.95,
+        **{category: 0.01 for category in CATEGORY_PROMPTS if category != 'Food & Drinks'},
+    }
+
+    result = classify_record(record, visual_scores)
+
+    assert result['category'] == 'Government & Identity'
+    assert result['classification_status'] == 'classified'
+    assert 'semantic_score' not in result['evidence_sources']
+    assert any('passport' in reason for reason in result['classification_reason'])
+
+
 def test_close_semantic_categories_need_review(monkeypatch, tmp_path):
     embedding_path = tmp_path / 'embedding.npy'
     embedding_path.write_bytes(b'placeholder')

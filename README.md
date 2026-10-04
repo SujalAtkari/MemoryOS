@@ -71,7 +71,7 @@ In AI Workspace, **Fast visual categories** (the default) creates one OpenCLIP i
 
 Controlled local timing on 10 generated 320x240 JPEGs: warm Fast visual processing took 4.096 seconds; warm Detailed processing took 147.354 seconds (about 36x slower on this run). This is a small synthetic benchmark, not a production-library guarantee; image dimensions, content, and hardware affect results.
 
-The current classifier version is `phase3-multi-evidence-v6`; older classification results are recalculated when the library is classified again.
+The current classifier version is `phase3-multi-evidence-v7`; older classification results are recalculated when the library is classified again. A clear, consistent exact-keyword match in reliable OCR, captions, or a descriptive filename takes precedence over visual similarity. If keyword sources disagree or the evidence is unclear, the result remains reviewable rather than claiming guaranteed accuracy. No automated image classifier can guarantee 100% accuracy for every image.
 
 Out of scope:
 
@@ -86,7 +86,7 @@ Duplicate detection is implemented in Phase 5 below; it does not delete or copy 
 
 Phase 3 classifies indexed records using the existing Phase 2 OCR text, BLIP caption, and locally stored OpenCLIP image embedding, together with filename/path and basic image metadata. Classification does not rerun OCR, captioning, or image embedding generation. OpenCLIP category-text embeddings are generated with the Phase 2 ViT-B-32 model and cached in memory; the existing `.npy` image embedding is reused. No vector database or second image-embedding copy is created.
 
-This is a multi-evidence classifier, not a custom-trained model. Its confidence is a weighted evidence score, not a calibrated probability or an accuracy claim. Every successfully processed image receives one of the 15 categories. A clear, sufficiently supported winner is assigned to its category; ambiguous, conflicting, or weak evidence (leading score below `0.12`) is assigned to `Others`, never left in a review queue. This conservative fallback avoids presenting a guess as a confident category.
+This is a multi-evidence classifier, not a custom-trained model. Its confidence is a weighted evidence score, not a calibrated probability or an accuracy claim. Every successfully processed image receives one of the 15 categories. A clear, sufficiently supported winner is assigned to its category; ambiguous, conflicting, or weak evidence (leading score below `0.12`) is flagged for review and may be assigned to `Others` rather than presenting a guess as certain. A clear and consistent exact-keyword match takes precedence over visual similarity.
 
 The exact categories are:
 
@@ -114,9 +114,9 @@ Evidence weights, normalized over sources present for that record:
 - OpenCLIP category-text similarity score: `0.23`
 - basic metadata score: `0.05`
 
-OCR keyword evidence is used only when OCR completed and its confidence is at least `0.50`. OpenCLIP category similarities are converted to relative category probabilities using a softmax temperature of `0.08`. The leading category is assigned unless the runner-up is at least 90% of the leader, strong evidence sources conflict, evidence is missing, or the leading weighted score is below `0.12`; those cases go to `Others`. The score and ambiguity checks are not calibrated accuracy probabilities. `ClassificationConfig` exposes the evidence weights, ambiguity ratio, and minimum score. Category prompts, version, scores, matched keywords, sources, and assignment reasons are retained for interpretability.
+OCR keyword evidence is used only when OCR completed and its confidence is at least `0.50`. When a keyword source has a clear winner and all other clear keyword sources agree, visual similarity is not used to override it. OpenCLIP category similarities are converted to relative category probabilities using a softmax temperature of `0.08` for cases without a decisive keyword match. The leading category is assigned unless the runner-up is at least 90% of the leader, strong evidence sources conflict, evidence is missing, or the leading weighted score is below `0.12`; uncertain cases are marked for review and may be assigned to `Others`. The score and ambiguity checks are not calibrated accuracy probabilities. `ClassificationConfig` exposes the evidence weights, ambiguity ratio, and minimum score. Category prompts, version, scores, matched keywords, sources, and assignment reasons are retained for interpretability.
 
-Classification adds fields to existing records in `data/index/library_index.json`; it does not create another index. Version `phase3-multi-evidence-v6` migrates older classifications the next time that library is classified. Reprocessing skips records whose classifier version and source SHA-256 match and whose classification output fields are present. Records without enough evidence receive `Others` with an explanation in `assignment_reason`.
+Classification adds fields to existing records in `data/index/library_index.json`; it does not create another index. Version `phase3-multi-evidence-v7` migrates older classifications the next time that library is classified. Reprocessing skips records whose classifier version and source SHA-256 match and whose classification output fields are present. Records without enough evidence receive `Others` with an explanation in `assignment_reason`.
 
 API:
 
@@ -134,7 +134,7 @@ Request:
 }
 ```
 
-Omit `record_id` to process all indexed images, or provide a relative-path record ID to process one image. The response includes assigned, legacy `needs_review` (always zero for the current classifier), failed, and skipped counts.
+Omit `record_id` to process all indexed images, or provide a relative-path record ID to process one image. The response includes assigned, needs-review, failed, and skipped counts.
 
 To generate captions without rerunning OCR or image embeddings:
 

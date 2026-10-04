@@ -168,10 +168,12 @@ def _summarize_library(library_id: str, library: dict) -> dict:
         stats['file_status'][file_status] += 1
 
         importance_status = record.get('importance_status')
-        if record.get('is_important') is True:
-            stats['importance']['important'] += 1
-        else:
-            stats['importance'][importance_status if importance_status in stats['importance'] else 'normal'] += 1
+        importance_status = (
+            importance_status
+            if importance_status in stats['importance']
+            else 'important' if record.get('is_important') is True else 'normal'
+        )
+        stats['importance'][importance_status] += 1
         if record.get('protection_status') == 'protected':
             stats['protected_images'] += 1
         lifecycle_status = record.get('lifecycle_status')

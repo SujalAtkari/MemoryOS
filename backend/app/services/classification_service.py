@@ -14,7 +14,7 @@ from app.services.local_llm_service import classify_ambiguous_records
 from app.services.taxonomy import infer_subcategory, valid_subcategory
 from app.services.text_extraction_service import extract_keywords_and_phrases
 
-CLASSIFICATION_VERSION = 'phase3-multi-evidence-v6'
+CLASSIFICATION_VERSION = 'phase3-multi-evidence-v7'
 SEMANTIC_TEMPERATURE = 0.08
 
 CATEGORY_PROMPTS = {
@@ -271,6 +271,20 @@ def _keyword_scores(matches: dict[str, list[str]]) -> dict[str, float]:
     return scores
 
 
+def _has_clear_keyword_winner(
+    source_scores: dict[str, dict[str, float]],
+) -> bool:
+    winners = []
+    for source in ('ocr_score', 'caption_score', 'filename_score'):
+        scores = source_scores.get(source)
+        if not scores:
+            continue
+        ordered = sorted(scores.items(), key=lambda item: (-item[1], item[0]))
+        if ordered[0][1] >= 0.5 and ordered[0][1] - ordered[1][1] >= 0.25:
+            winners.append(ordered[0][0])
+    return bool(winners) and len(set(winners)) == 1
+
+
 def _filename_is_generic(record: dict) -> bool:
     filename = str(record.get('filename') or '').lower()
     stem = Path(filename).stem
@@ -334,6 +348,10 @@ def classify_record(
             category: max(0.0, float(semantic_scores.get(category, 0.0)))
             for category in CATEGORY_PROMPTS
         }
+    if _has_clear_keyword_winner(source_scores):
+        source_scores.pop('semantic_score', None)
+        semantic_scores = None
+        semantic_concepts = None
 
     adaptive_config_weights = dict(config.weights)
     if ocr_reliable and 'ocr_score' in source_scores:

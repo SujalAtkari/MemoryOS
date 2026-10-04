@@ -60,8 +60,8 @@ def update_record_state(
         'protection_status': (protection_status, PROTECTION_STATUSES),
         'lifecycle_status': (lifecycle_status, LIFECYCLE_STATUSES),
     }
-        if is_important is not None and not isinstance(is_important, bool):
-            raise RecordStateError('is_important must be a boolean.')
+    if is_important is not None and not isinstance(is_important, bool):
+        raise RecordStateError('is_important must be a boolean.')
     for field, (value, allowed) in values.items():
         if value is not None and value not in allowed:
             raise RecordStateError(f'Invalid {field.replace("_", " ")}.')
@@ -71,10 +71,17 @@ def update_record_state(
         if value is not None:
             record[field] = value
             record[f'{field.split("_")[0]}_source'] = 'manual'
-        if is_important is not None:
-            record['is_important'] = is_important
-            record['importance_marked_at'] = datetime.now().astimezone().isoformat(timespec='seconds') if is_important else None
-            record['importance_source'] = 'manual'
+    if importance_status is not None:
+        is_important = importance_status in ('critical', 'important')
+    if is_important is not None:
+        record['is_important'] = is_important
+        record['importance_marked_at'] = (
+            datetime.now().astimezone().isoformat(timespec='seconds')
+            if is_important
+            else None
+        )
+        record['importance_source'] = 'manual'
+        if importance_status is None:
             record['importance_status'] = 'important' if is_important else 'normal'
     record['record_state_updated_at'] = datetime.now().astimezone().isoformat(timespec='seconds')
     _save_index(index)

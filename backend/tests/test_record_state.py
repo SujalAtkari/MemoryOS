@@ -46,3 +46,48 @@ def test_record_state_updates_are_persisted(tmp_path, monkeypatch):
     assert record['lifecycle_status'] == 'review'
     assert record['importance_source'] == 'manual'
     assert json.loads(index_path.read_text(encoding='utf-8'))['libraries']['library']['records']['photo.jpg']['protection_status'] == 'protected'
+
+
+def test_priority_status_controls_important_collection_membership(tmp_path, monkeypatch):
+    index_path = tmp_path / 'library_index.json'
+    monkeypatch.setattr(record_state_service, 'INDEX_PATH', index_path)
+    index_path.write_text(json.dumps({
+        'version': 1,
+        'libraries': {
+            'library': {
+                'library_root': str(tmp_path),
+                'records': {
+                    'photo.jpg': {
+                        'record_id': 'photo.jpg',
+                        'relative_path': 'photo.jpg',
+                        'is_important': False,
+                        'importance_status': 'normal',
+                    },
+                },
+            },
+        },
+    }), encoding='utf-8')
+
+    critical_response = client.patch('/records/state', json={
+        'library_id': 'library',
+        'record_id': 'photo.jpg',
+        'importance_status': 'critical',
+    })
+
+    assert critical_response.status_code == 200
+    critical_record = critical_response.json()['record']
+    assert critical_record['importance_status'] == 'critical'
+    assert critical_record['is_important'] is True
+    assert critical_record['importance_marked_at']
+
+    normal_response = client.patch('/records/state', json={
+        'library_id': 'library',
+        'record_id': 'photo.jpg',
+        'importance_status': 'normal',
+    })
+
+    assert normal_response.status_code == 200
+    normal_record = normal_response.json()['record']
+    assert normal_record['importance_status'] == 'normal'
+    assert normal_record['is_important'] is False
+    assert normal_record['importance_marked_at'] is None
